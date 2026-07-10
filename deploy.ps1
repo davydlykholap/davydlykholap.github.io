@@ -1,93 +1,65 @@
-<#
-  Publishes this portfolio to https://github.com/davydlykholap/davyd.github.io
+# Requires -Version 5.1
 
-  First use:
-    .\deploy.ps1
-
-  Later:
-    .\deploy.ps1 -Message "Describe your update"
-#>
-[CmdletBinding()]
-param(
-    [string]$Message
-)
-
+# Enable strict error handling. The script will terminate if an unhandled error occurs.
 $ErrorActionPreference = "Stop"
 
-function Write-Status([string]$Text) {
-    Write-Host "`n==> $Text" -ForegroundColor Cyan
+# Verification: Ensure the directory is a Git repository
+if (-not (Test-Path -Path ".git")) {
+    Write-Error "The current directory is not a Git repository. Please initialize Git before running this script."
+    Exit 1
 }
 
-function Test-Command([string]$Name) {
-    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
-}
-
-if (-not (Test-Command git)) {
-    throw "Git is not installed or is not on PATH. Install it from https://git-scm.com/download/win, then run this script again."
-}
-
-$projectRoot = Split-Path -Parent $PSCommandPath
-Set-Location -LiteralPath $projectRoot
-$remoteUrl = "https://github.com/davydlykholap/davyd.github.io.git"
-
-if (-not (Test-Path -LiteralPath (Join-Path $projectRoot ".git"))) {
-    Write-Status "Initializing Git repository"
-    git init
-    git branch -M main
-}
-
-$remotes = @(git remote)
+# Verification: Ensure the 'origin' remote exists
+$remotes = git remote
 if ($remotes -notcontains "origin") {
-    Write-Status "Adding GitHub remote"
-    git remote add origin $remoteUrl
-}
-else {
-    $currentRemote = git remote get-url origin
-    if ($currentRemote -eq $remoteUrl) {
-        # The correct destination is already configured.
-    }
-    else {
-    Write-Warning "The existing 'origin' remote is: $currentRemote"
-    $replaceRemote = Read-Host "Replace it with $remoteUrl ? (y/N)"
-    if ($replaceRemote -match '^[Yy]$') {
-        git remote set-url origin $remoteUrl
-    }
-    else {
-        throw "Publishing stopped. The origin remote needs to be https://github.com/davydlykholap/davyd.github.io.git."
-    }
-    }
+    Write-Error "The remote 'origin' is not configured in this repository."
+    Exit 1
 }
 
-Write-Status "Staging site files"
-git branch -M main
+Write-Output "Checking for modifications and untracked files..."
 
-# Bring the local repository in sync before creating a new commit. This keeps
-# edits made from GitHub's web UI from being accidentally overwritten.
-Write-Status "Syncing with GitHub"
-git pull origin main --no-rebase
+# Fetch porcelain status to programmatically check for any changes
+$gitStatus = git status --porcelain
 
-git add --all
-
-git diff --cached --quiet
-$hasStagedChanges = $LASTEXITCODE -ne 0
-
-if ($hasStagedChanges) {
-    if ([string]::IsNullOrWhiteSpace($Message)) {
-        $Message = Read-Host "Commit message (leave blank for an automatic message)"
-    }
-    if ([string]::IsNullOrWhiteSpace($Message)) {
-        $Message = "Portfolio update - " + (Get-Date -Format "yyyy-MM-dd HH:mm")
-    }
-    Write-Status "Creating commit"
-    git commit -m $Message
-}
-else {
-    Write-Host "No uncommitted changes found; pushing the current main branch." -ForegroundColor Yellow
+if (-not $gitStatus) {
+    Write-Output "No changes detected. The repository is already up to date."
+    Exit 0
 }
 
-Write-Status "Pushing to davydlykholap/davyd.github.io"
-git push --set-upstream origin main
+# Display a summarized view of modified or untracked files to the user
+Write-Output "`nThe following changes will be processed:"
+git status --short
 
-Write-Host "`nPublished successfully." -ForegroundColor Green
-Write-Host "Enable GitHub Pages in the repository settings if this is the first publish." -ForegroundColor Green
-Write-Host "Repository: https://github.com/davydlykholap/davyd.github.io" -ForegroundColor Green
+# Solicit a commit message from the user
+Write-Output ""
+$inputMessage = Read-Host "Enter a commit message (Leave blank to use the default auto-generated message)"
+
+# Determine the final commit message string
+if ([string]::IsNullOrWhitespace($inputMessage)) {
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $commitMessage = "Automated deployment update - $timestamp"
+} else {
+    $commitMessage = $inputMessage.Trim()
+}
+
+# Execute deployment phase within a try/catch block to intercept exceptions
+try {
+    # Fetch and merge latest changes from remote to stay in sync
+    Write-Output "`nFetching and merging latest changes from GitHub..."
+    git pull origin main --no-rebase
+
+    Write-Output "`nStaging files..."
+    git add .
+
+    Write-Output "Committing changes..."
+    git commit -m "$commitMessage"
+
+    Write-Output "Pushing changes to origin main..."
+    git push origin main
+
+    Write-Output "`nDeployment completed successfully. Changes have been pushed to GitHub."
+}
+catch {
+    Write-Error "Deployment failed during execution. Details: $_"
+    Exit 1
+}
